@@ -34,6 +34,8 @@ pub enum CcDefaults {
     Mesa3DIntelManual,
     Mesa3DPanvk,
     Mesa3DPanvkManual,
+    Mesa3DTurnip,
+    Mesa3DTurnipManual,
 }
 impl CcDefaults {
     pub fn str(self) -> String {
@@ -49,6 +51,8 @@ impl CcDefaults {
             Self::Mesa3DIntelManual => "desktop-mesa3d-intel-raw-defaults",
             Self::Mesa3DPanvk => "desktop-mesa3d-panvk-defaults",
             Self::Mesa3DPanvkManual => "desktop-mesa3d-panvk-raw-defaults",
+            Self::Mesa3DTurnip => "desktop-mesa3d-turnip-defaults",
+            Self::Mesa3DTurnipManual => "desktop-mesa3d-turnip-raw-defaults",
         })
     }
 }
