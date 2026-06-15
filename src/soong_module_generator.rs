@@ -441,6 +441,19 @@ where
                 }
             }
         }
+        for (dep, dep_target_name) in deps {
+            let canonicalize_dep = canonicalize_path(&dep, self.build_path);
+            for from in vec![
+                path_to_string(canonicalize_dep.parent().unwrap()),
+                path_to_string(dep.parent().unwrap()),
+            ] {
+                if let Some(suffix) = cmd.strip_prefix(&from) {
+                    return format!(
+                        "$$(dirname $(location :{dep_target_name})){suffix}",
+                    );
+                }
+            }
+        }
         for output in outputs {
             let output_string = path_to_string(output.parent().unwrap());
             let canonicalize_output = canonicalize_path(&output_string, self.build_path);
@@ -644,6 +657,13 @@ where
         if cmd.starts_with("cp") {
             return Ok((Vec::new(), Vec::new(), Vec::new(), cmd));
         }
+        let mut append_capture = false;
+        if let Some(index) = cmd.find(" -- ") {
+            if cmd.contains("meson --internal exe") {
+                append_capture = cmd.contains("--capture ");
+                cmd = String::from(&cmd[index + 4..]);
+            }
+        }
         while let Some(index) = cmd.find("python") {
             let begin = str::from_utf8(&cmd.as_bytes()[0..index])
                 .unwrap()
@@ -707,38 +727,44 @@ where
             })
             .collect::<Vec<_>>();
 
-        if let Some((tool_module, some_modules)) = self.get_tool_module(&tool, python_inputs)? {
-            cmd = cmd.replace(
-                &tool_location,
-                &(String::from("$(location ") + &tool_module + ")"),
-            );
-            tool_modules.push(tool_module);
-            return if let Some(modules) = some_modules {
-                Ok((Vec::new(), tool_modules, modules, cmd))
-            } else {
-                Ok((Vec::new(), tool_modules, Vec::new(), cmd))
-            };
+        let (tool_files, tool_modules, modules, mut cmd) = 'result: {
+            if let Some((tool_module, some_modules)) = self.get_tool_module(&tool, python_inputs)? {
+                cmd = cmd.replace(
+                    &tool_location,
+                    &(String::from("$(location ") + &tool_module + ")"),
+                );
+                tool_modules.push(tool_module);
+                break 'result if let Some(modules) = some_modules {
+                    (Vec::new(), tool_modules, modules, cmd)
+                } else {
+                    (Vec::new(), tool_modules, Vec::new(), cmd)
+                };
+            }
+            let tool_name = file_name(&tool);
+            if ["bison", "flex"].contains(&tool_name.as_str()) {
+                tool_modules.push(tool_name.clone());
+                tool_modules.push(String::from("m4"));
+                break 'result (
+                    Vec::new(),
+                    tool_modules,
+                    Vec::new(),
+                    String::from("M4=$(location m4) ")
+                        + &cmd.replace(
+                            "$(location)",
+                            &(String::from("$(location ") + &tool_name + ")"),
+                        ),
+                );
+            }
+            if tool_name == "glslangValidator" {
+                tool_modules.push(glslang_validator.clone());
+                break 'result (Vec::new(), tool_modules, Vec::new(), cmd);
+            }
+            (vec![path_to_string(tool)], tool_modules, Vec::new(), cmd)
+        };
+        if append_capture {
+            cmd += " > $(out)";
         }
-        let tool_name = file_name(&tool);
-        if ["bison", "flex"].contains(&tool_name.as_str()) {
-            tool_modules.push(tool_name.clone());
-            tool_modules.push(String::from("m4"));
-            return Ok((
-                Vec::new(),
-                tool_modules,
-                Vec::new(),
-                String::from("M4=$(location m4) ")
-                    + &cmd.replace(
-                        "$(location)",
-                        &(String::from("$(location ") + &tool_name + ")"),
-                    ),
-            ));
-        }
-        if tool_name == "glslangValidator" {
-            tool_modules.push(glslang_validator.clone());
-            return Ok((Vec::new(), tool_modules, Vec::new(), cmd));
-        }
-        Ok((vec![path_to_string(tool)], tool_modules, Vec::new(), cmd))
+        Ok((tool_files, tool_modules, modules, cmd))
     }
     pub fn generate_custom_command(
         &mut self,

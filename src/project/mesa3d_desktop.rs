@@ -215,6 +215,62 @@ soong_namespace {
                 }
             }
         }
+        // When a genrule command uses `-p <dir>` to set a Python import path and
+        // the .py files in that directory come from multiple separate genrules
+        // (each with its own Soong sandbox directory), we must stage them into a
+        // single temporary directory so Python can import them all.
+        if let Some(cmd_prop) = module.get_prop("cmd") {
+            if let SoongProp::Str(ref cmd) = cmd_prop.get_prop() {
+                if cmd.contains("-p $$(dirname $(location :") {
+                    if let Some(srcs_prop) = module.get_prop("srcs") {
+                        if let SoongProp::VecStr(ref srcs) = srcs_prop.get_prop() {
+                            let py_genrule_srcs: Vec<&String> = srcs
+                                .iter()
+                                .filter(|s| s.starts_with(":") && s.ends_with("_py"))
+                                .collect();
+                            if py_genrule_srcs.len() > 1 {
+                                let mut staging_cmds = String::from(
+                                    "PYDIR=$$(mktemp -d)",
+                                );
+                                for src in &py_genrule_srcs {
+                                    staging_cmds += &format!(
+                                        " && cp $(location {src}) $$PYDIR/"
+                                    );
+                                }
+                                module.update_prop("cmd", |prop| {
+                                    match prop {
+                                        SoongProp::Str(cmd) => {
+                                            // Replace the $$(dirname ...) pattern with $$PYDIR
+                                            let mut new_cmd = cmd.clone();
+                                            if let Some(start) = new_cmd.find("-p $$(dirname $(location :") {
+                                                let (replacement, end) =
+                                                    if let Some(e) = new_cmd[start..].find(")/") {
+                                                        ("-p $$PYDIR/", start + e + 2)
+                                                    } else if let Some(e) = new_cmd[start..].find("))") {
+                                                        ("-p $$PYDIR", start + e + 2)
+                                                    } else {
+                                                        ("-p $$PYDIR", new_cmd.len())
+                                                    };
+                                                new_cmd = format!(
+                                                    "{}{}{}",
+                                                    &new_cmd[..start],
+                                                    replacement,
+                                                    &new_cmd[end..],
+                                                );
+                                            }
+                                            Ok(SoongProp::Str(format!(
+                                                "{staging_cmds} && {new_cmd}; rm -rf $$PYDIR"
+                                            )))
+                                        }
+                                        _ => Ok(prop),
+                                    }
+                                })?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Ok(module.add_prop("vendor_available", SoongProp::Bool(true)))
     }
     fn extend_python_binary_host(
